@@ -22,9 +22,21 @@ type HFSpace[I any, O any] struct {
 
 // NewHfs creates a new HFSpace with a default HTTP client.
 // I is the input type, O is the output type. Use `any` if there are different types.
-func NewHfs[I, O any](Name string) *HFSpace[I, O] {
+func NewHfs[I, O any](name string) *HFSpace[I, O] {
 	return &HFSpace[I, O]{
-		BaseURL: "https://" + Name + ".hf.space/gradio_api/call",
+		BaseURL: "https://" + name + ".hf.space/gradio_api/call",
+		Headers: map[string]string{
+			"Content-Type": "application/json",
+		},
+		client: http.DefaultClient,
+	}
+}
+
+// NewHfsRaw creates a new HFSpace for spaces not hosted on Hugging Face with a default HTTP client.
+// I is the input type, O is the output type. Use `any` if there are different types.
+func NewHfsRaw[I, O any](url string) *HFSpace[I, O] {
+	return &HFSpace[I, O]{
+		BaseURL: strings.TrimRight(url, "/") + "/gradio_api/call",
 		Headers: map[string]string{
 			"Content-Type": "application/json",
 		},
@@ -151,6 +163,17 @@ func (h *HFSpace[I, O]) Do(endpoint string, params ...I) ([]O, error) {
 	}
 
 	return Result, nil
+}
+
+func (h *HFSpace[I, O]) DoFD(endpoint string, params ...I) ([]byte, error) {
+	res, err := h.Do(endpoint, params...)
+	if err != nil {
+		return nil, err
+	}
+	if len(res) == 0 {
+		return nil, fmt.Errorf("hfs no results from Do()")
+	}
+	return GetFileData(res[0])
 }
 
 // Gradio-compatible FileData structure.

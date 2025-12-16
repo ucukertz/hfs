@@ -153,6 +153,8 @@ func main() {
 }
 ```
 
+You can use `DoFD()` instead of `Do()` when you only want to use []byte from an output FileData and the FileData is the first item of the output.
+
 ---
 
 ## Notes
@@ -161,12 +163,13 @@ func main() {
 - Use `FileData.FromUrl()`, `.FromBytes()`, or `.FromBase64()` to construct uploadable inputs.
 - `.WithBearerToken()`, `.WithTimeout()`, `.WithUserAgent()`, and `.WithHTTPClient()` allow full customization.
 - This module uses the "curl" API so public URL for file input is [mandatory](https://www.gradio.app/guides/querying-gradio-apps-with-curl) (see "Files" section). `FileData.FromBytes()` and `.FromBase64()` use `Quax` to conveniently achieve this.
+- `NewHfsRaw()` can be used for spaces not hosted on Hugging Face. 
 
 ---
 
 ## Extra Quax
 
-The **Quax** helper is included as a public file uploader that returns a direct URL.  
+The [**Quax**](https://qu.ax/) helper is included as a public file uploader that returns a direct URL.  
 This module uses it internally for `FileData.FromBytes()` and `.FromBase64()`, you can also use it directly to upload files to the Quax hosting API and get a public URL.
 
 ### Quax Usage Example
