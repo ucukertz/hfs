@@ -32,11 +32,11 @@ func NewHfs[I, O any](name string) *HFSpace[I, O] {
 	}
 }
 
-// NewHfsRaw creates a new HFSpace for spaces not hosted on Hugging Face with a default HTTP client.
+// NewHfsRaw creates a new HFSpace for non-standard spaces or not hosted on Hugging Face with a default HTTP client.
 // I is the input type, O is the output type. Use `any` if there are different types.
 func NewHfsRaw[I, O any](url string) *HFSpace[I, O] {
 	return &HFSpace[I, O]{
-		BaseURL: strings.TrimRight(url, "/") + "/gradio_api/call",
+		BaseURL: strings.TrimRight(url, "/"),
 		Headers: map[string]string{
 			"Content-Type": "application/json",
 		},
