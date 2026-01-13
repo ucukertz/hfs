@@ -228,9 +228,8 @@ func (fd *FileData) FromBase64(b64 string) (*FileData, error) {
 	return fd.FromBytes(decoded)
 }
 
-// Check if src is a FileData.
-// Download content from FileData's URL if so.
-func GetFileData(src any) ([]byte, error) {
+// Parse src into a FileData struct.
+func ParseFileData(src any) (*FileData, error) {
 	var fd FileData
 
 	switch v := src.(type) {
@@ -241,6 +240,14 @@ func GetFileData(src any) ([]byte, error) {
 			return nil, fmt.Errorf("hfs nil *FileData")
 		}
 		fd = *v
+	case map[string]any:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return nil, fmt.Errorf("hfs filedata map json encode: %w", err)
+		}
+		if err := json.Unmarshal(b, &fd); err != nil {
+			return nil, fmt.Errorf("hfs filedata map json decode: %w", err)
+		}
 	default:
 		b, err := json.Marshal(src)
 		if err != nil {
@@ -250,7 +257,8 @@ func GetFileData(src any) ([]byte, error) {
 			return nil, fmt.Errorf("hfs filedata json decode: %w", err)
 		}
 	}
-	return FileDataDownload(&fd, 30*time.Second)
+
+	return &fd, nil
 }
 
 // Download content from a FileData's HTTPS URL.
@@ -297,4 +305,14 @@ func FileDataDownload(fileData *FileData, timeout time.Duration) ([]byte, error)
 	}
 
 	return content, nil
+}
+
+// Check if src is a FileData.
+// Download content from FileData's URL if so.
+func GetFileData(src any) ([]byte, error) {
+	fd, err := ParseFileData(src)
+	if err != nil {
+		return nil, fmt.Errorf("hfs get filedata parse: %w", err)
+	}
+	return FileDataDownload(fd, 60*time.Second)
 }
