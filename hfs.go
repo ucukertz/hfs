@@ -138,7 +138,11 @@ func (h *HFSpace[I, O]) Do(endpoint string, params ...I) ([]O, error) {
 	for _, line := range lines {
 		if strings.HasPrefix(line, "event:") {
 			if strings.Contains(line, "error") {
-				return nil, fmt.Errorf("hfs event error")
+				hferr := ""
+				for _, l := range lines {
+					hferr += l + "\n"
+				}
+				return nil, fmt.Errorf("%s", hferr)
 			}
 			if strings.Contains(line, "complete") {
 				EventCompleted = true
