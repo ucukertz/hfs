@@ -167,39 +167,6 @@ You can use `DoFD()` instead of `Do()` when you only want to use []byte from an 
 
 ---
 
-## Extra Quax
-
-The [**Quax**](https://qu.ax/) helper is included as a public file uploader that returns a direct URL.  
-This module uses it internally for `FileData.FromBytes()` and `.FromBase64()`, you can also use it directly to upload files to the Quax hosting API and get a public URL.
-
-### Quax Usage Example
-
-```go
-package main
-
-import (
-    "fmt"
-    "os"
-    "github.com/ucukertz/hfs"
-)
-
-func main() {
-    q := hfs.NewQuax(nil)
-
-    data, _ := os.ReadFile("local-file.jpg")
-
-	// Can also use filepath directly (no second arg)
-    url, err := q.Upload(data, "local-file.jpg")
-    if err != nil {
-        panic(err)
-    }
-
-    fmt.Println("Uploaded to:", url)
-}
-```
-
----
-
 ## License
 
 Distributed under the MIT License. See `LICENSE` for more information.

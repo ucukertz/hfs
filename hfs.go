@@ -135,13 +135,22 @@ func (h *HFSpace[I, O]) Do(endpoint string, params ...I) ([]O, error) {
 
 	EventCompleted := false
 	var data string
-	for _, line := range lines {
+	for idx, line := range lines {
 		if strings.HasPrefix(line, "event:") {
 			if strings.Contains(line, "error") {
 				hferr := ""
-				for _, l := range lines {
-					hferr += l + "\n"
+				errline := idx
+				hb_count := 0
+				for pos, l := range lines {
+					if strings.Contains(l, "heartbeat") {
+						hb_count++
+						continue
+					}
+					if pos >= errline {
+						hferr += l + "\n"
+					}
 				}
+				hferr = fmt.Sprint(hferr, "hbcount: ", hb_count)
 				return nil, fmt.Errorf("%s", hferr)
 			}
 			if strings.Contains(line, "complete") {
@@ -203,7 +212,7 @@ func NewFileData(name string) *FileData {
 
 func (fd *FileData) FromUrl(url string) (*FileData, error) {
 	fd.URL = url
-	fd.Path = url
+	fd.Path = ""
 	fd.Size = 0
 	return fd, nil
 }
@@ -213,14 +222,14 @@ func (fd *FileData) FromBytes(data []byte) (*FileData, error) {
 		return nil, fmt.Errorf("hfs empty data")
 	}
 
-	url, err := NewQuax(nil).rawUpload(data, fd.OrigName)
-	if err != nil {
-		return nil, fmt.Errorf("hfs quax upload: %w", err)
-	}
+	mimeType := http.DetectContentType(data)
+	encodedData := base64.StdEncoding.EncodeToString(data)
+	dataURI := fmt.Sprintf("data:%s;base64,%s", mimeType, encodedData)
 
-	fd.URL = url
-	fd.Path = url
+	fd.URL = dataURI
 	fd.Size = int64(len(data))
+	fd.Path = ""
+
 	return fd, nil
 }
 
