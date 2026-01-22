@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"strings"
 	"time"
@@ -71,6 +72,55 @@ func (h *HFSpace[I, O]) WithUserAgent(agent string) *HFSpace[I, O] {
 func (h *HFSpace[I, O]) WithHTTPClient(client *http.Client) *HFSpace[I, O] {
 	h.client = client
 	return h
+}
+
+// Upload performs data upload to the space.
+// Returns server path of the uploaded data.
+func (h *HFSpace[I, O]) Upload(data []byte) (string, error) {
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	part, err := writer.CreateFormFile("files", "image.jpg")
+	if err != nil {
+		return "", err
+	}
+
+	_, err = io.Copy(part, bytes.NewReader(data))
+	if err != nil {
+		return "", err
+	}
+
+	writer.Close()
+
+	url := strings.TrimSuffix(h.BaseURL, "/call") + "/upload"
+	req, err := http.NewRequest("POST", url, body)
+	if err != nil {
+		return "", err
+	}
+
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("hfs bad status: %s", resp.Status)
+	}
+
+	var resultPaths []string
+	if err := json.NewDecoder(resp.Body).Decode(&resultPaths); err != nil {
+		return "", err
+	}
+
+	if len(resultPaths) == 0 {
+		return "", fmt.Errorf("hfs server returned empty path list")
+	}
+
+	return resultPaths[0], nil
 }
 
 // Do performs the full request + follow-up GET using the event ID.
@@ -147,7 +197,7 @@ func (h *HFSpace[I, O]) Do(endpoint string, params ...I) ([]O, error) {
 						continue
 					}
 					if pos >= errline {
-						hferr += l + "\n"
+						hferr += l + " -- "
 					}
 				}
 				hferr = fmt.Sprint(hferr, "hbcount: ", hb_count)
@@ -239,6 +289,18 @@ func (fd *FileData) FromBase64(b64 string) (*FileData, error) {
 		return nil, fmt.Errorf("hfs base64 decode: %w", err)
 	}
 	return fd.FromBytes(decoded)
+}
+
+func (fd *FileData) FromUpload(hfs HFSpace[any, any], data []byte) (*FileData, error) {
+	path, err := hfs.Upload(data)
+	if err != nil {
+		return nil, err
+	}
+
+	fd.Path = path
+	fd.URL = ""
+	fd.Size = 0
+	return fd, nil
 }
 
 // Parse src into a FileData struct.

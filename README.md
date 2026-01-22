@@ -160,10 +160,9 @@ You can use `DoFD()` instead of `Do()` when you only want to use []byte from an 
 ## Notes
 
 - `GetFileData()` automatically extracts and downloads the content of a `FileData` output.
-- Use `FileData.FromUrl()`, `.FromBytes()`, or `.FromBase64()` to construct uploadable inputs.
+- Use `FileData.FromUrl()`, `.FromBytes()`, `.FromUpload()`, or `.FromBase64()` to construct file inputs. Some spaces demand files used as input to be uploaded directly to the server, only FileData created with `.FromUpload()` work on those.
 - `.WithBearerToken()`, `.WithTimeout()`, `.WithUserAgent()`, and `.WithHTTPClient()` allow full customization.
-- This module uses the "curl" API so public URL for file input is [mandatory](https://www.gradio.app/guides/querying-gradio-apps-with-curl) (see "Files" section). `FileData.FromBytes()` and `.FromBase64()` use `Quax` to conveniently achieve this.
-- `NewHfsRaw()` can be used for spaces not hosted on Hugging Face. 
+- `NewHfsRaw()` can be used for spaces not hosted on Hugging Face.
 
 ---
 
