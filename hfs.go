@@ -391,3 +391,27 @@ func GetFileData(src any) ([]byte, error) {
 	}
 	return FileDataDownload(fd, 60*time.Second)
 }
+
+// Check if src is gallery.
+// Download content image on gallery idx.
+func GetGalleryImage(src any, idx int) ([]byte, error) {
+	garr, ok := src.([]any)
+	if !ok {
+		return nil, fmt.Errorf("hfs not gallery")
+	}
+	if len(garr) < idx+1 {
+		return nil, fmt.Errorf("hfs no idx in gallery")
+	}
+	json := garr[idx].(map[string]any)
+	fd, err := ParseFileData(json["image"])
+	if err != nil {
+		return nil, err
+	}
+
+	fd.URL = strings.ReplaceAll(fd.URL, "space/ca", "space")
+	img, err := FileDataDownload(fd, 60*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return img, err
+}
