@@ -24,24 +24,25 @@ type HFSpace[I any, O any] struct {
 // NewHfs creates a new HFSpace with a default HTTP client.
 // I is the input type, O is the output type. Use `any` if there are different types.
 func NewHfs[I, O any](name string) *HFSpace[I, O] {
-	return &HFSpace[I, O]{
-		BaseURL: "https://" + name + ".hf.space/gradio_api/call",
-		Headers: map[string]string{
-			"Content-Type": "application/json",
-		},
-		client: http.DefaultClient,
-	}
+	return newSpace[I, O]("https://" + name + ".hf.space/gradio_api/call")
 }
 
 // NewHfsRaw creates a new HFSpace for non-standard spaces or not hosted on Hugging Face with a default HTTP client.
 // I is the input type, O is the output type. Use `any` if there are different types.
 func NewHfsRaw[I, O any](url string) *HFSpace[I, O] {
+	return newSpace[I, O](strings.TrimRight(url, "/"))
+}
+
+func newSpace[I, O any](baseURL string) *HFSpace[I, O] {
 	return &HFSpace[I, O]{
-		BaseURL: strings.TrimRight(url, "/"),
+		BaseURL: baseURL,
 		Headers: map[string]string{
 			"Content-Type": "application/json",
 		},
-		client: http.DefaultClient,
+		// A client per space, not http.DefaultClient: WithTimeout writes to
+		// client.Timeout, which on the shared default would reach every other
+		// space and every other user of net/http in the process.
+		client: &http.Client{},
 	}
 }
 
@@ -82,38 +83,48 @@ func (h *HFSpace[I, O]) Upload(data []byte) (string, error) {
 
 	part, err := writer.CreateFormFile("files", "image.jpg")
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("hfs upload form file: %w", err)
 	}
 
-	_, err = io.Copy(part, bytes.NewReader(data))
-	if err != nil {
-		return "", err
+	if _, err := part.Write(data); err != nil {
+		return "", fmt.Errorf("hfs upload write: %w", err)
 	}
 
-	writer.Close()
+	if err := writer.Close(); err != nil {
+		return "", fmt.Errorf("hfs upload form close: %w", err)
+	}
 
 	url := strings.TrimSuffix(h.BaseURL, "/call") + "/upload"
 	req, err := http.NewRequest("POST", url, body)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("hfs upload req create: %w", err)
 	}
 
+	for k, v := range h.Headers {
+		req.Header.Set(k, v)
+	}
+	// After the header loop: the default Content-Type is application/json, and
+	// multipart needs its own boundary.
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := h.client.Do(req)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("hfs upload req exec: %w", err)
 	}
 	defer resp.Body.Close()
 
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("hfs upload resp read: %w", err)
+	}
+
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("hfs bad status: %s", resp.Status)
+		return "", fmt.Errorf("hfs upload %s: %s", resp.Status, apiDetail(respBody))
 	}
 
 	var resultPaths []string
-	if err := json.NewDecoder(resp.Body).Decode(&resultPaths); err != nil {
-		return "", err
+	if err := json.Unmarshal(respBody, &resultPaths); err != nil {
+		return "", fmt.Errorf("hfs upload resp decode: %w", err)
 	}
 
 	if len(resultPaths) == 0 {
@@ -150,17 +161,30 @@ func (h *HFSpace[I, O]) Do(endpoint string, params ...I) ([]O, error) {
 	}
 	defer resp.Body.Close()
 
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("hfs post resp read: %w", err)
+	}
+
+	// An overloaded space answers here rather than on the stream, with no
+	// event_id at all: 503 {"detail":"Queue is full. Max size is 20 ..."}.
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("hfs post %s: %s", resp.Status, apiDetail(respBody))
+	}
+
 	// Decode event ID
 	var idResp struct {
 		Eventid string `json:"event_id"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&idResp); err != nil {
+	if err := json.Unmarshal(respBody, &idResp); err != nil {
 		return nil, fmt.Errorf("hfs event ID decode: %w", err)
 	}
-	eventID := idResp.Eventid
+	if idResp.Eventid == "" {
+		return nil, fmt.Errorf("hfs empty event ID: %s", apiDetail(respBody))
+	}
 
 	// Step 2: GET request to fetch final result
-	streamURL := fmt.Sprintf("%s/%s", fullURL, eventID)
+	streamURL := fmt.Sprintf("%s/%s", fullURL, idResp.Eventid)
 
 	getReq, err := http.NewRequest("GET", streamURL, nil)
 	if err != nil {
@@ -181,42 +205,13 @@ func (h *HFSpace[I, O]) Do(endpoint string, params ...I) ([]O, error) {
 		return nil, fmt.Errorf("hfs get resp read: %w", err)
 	}
 
-	lines := strings.Split(string(res2), "\n")
-
-	EventCompleted := false
-	var data string
-	for idx, line := range lines {
-		if strings.HasPrefix(line, "event:") {
-			if strings.Contains(line, "error") {
-				hferr := ""
-				errline := idx
-				hb_count := 0
-				for pos, l := range lines {
-					if strings.Contains(l, "heartbeat") {
-						hb_count++
-						continue
-					}
-					if pos >= errline {
-						hferr += l + " -- "
-					}
-				}
-				hferr = fmt.Sprint(hferr, "hbcount: ", hb_count)
-				return nil, fmt.Errorf("%s", hferr)
-			}
-			if strings.Contains(line, "complete") {
-				EventCompleted = true
-			}
-		}
-		if strings.HasPrefix(line, "data:") {
-			data = strings.TrimSpace(line[len("data:"):])
-			if EventCompleted {
-				break
-			}
-		}
+	if resp2.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("hfs get %s: %s", resp2.Status, apiDetail(res2))
 	}
 
-	if len(data) == 0 {
-		return nil, fmt.Errorf("hfs no data in resp")
+	data, err := parseSSE(string(res2))
+	if err != nil {
+		return nil, err
 	}
 
 	// Final result
@@ -226,6 +221,116 @@ func (h *HFSpace[I, O]) Do(endpoint string, params ...I) ([]O, error) {
 	}
 
 	return Result, nil
+}
+
+// EventError is a failure the space reported over the event stream, such as a
+// rejected prompt or an exhausted ZeroGPU quota.
+type EventError struct {
+	Title   string // "title" from the event payload, when the space sent one
+	Message string // the space's own message
+	Raw     string // the whole event stream, for anything the fields miss
+}
+
+func (e *EventError) Error() string {
+	if e.Title == "" {
+		return e.Message
+	}
+	return e.Title + ": " + e.Message
+}
+
+// eventError builds an EventError from an "error" event's data payload.
+func eventError(payload, raw string) error {
+	var v struct {
+		Error string `json:"error"`
+		Title string `json:"title"`
+	}
+	_ = json.Unmarshal([]byte(payload), &v)
+
+	if v.Error == "" {
+		v.Error = strings.TrimSpace(payload)
+	}
+	if v.Error == "" {
+		v.Error = "unknown space error"
+	}
+
+	return &EventError{Title: v.Title, Message: v.Error, Raw: raw}
+}
+
+// parseSSE returns the data payload of the stream's "complete" event, or the
+// EventError carried by an "error" event.
+//
+// Events are framed by a blank line and their data may span several "data:"
+// lines, so this cannot just take the last "data:" line it sees: a multi-line
+// payload would be truncated, and a stream that carries heartbeats but no
+// "complete" event would hand back the last heartbeat's null.
+func parseSSE(body string) (string, error) {
+	var (
+		event string
+		data  []string
+	)
+
+	flush := func() (string, error, bool) {
+		e, d := event, strings.Join(data, "\n")
+		event, data = "", nil
+		switch e {
+		case "error":
+			return "", eventError(d, body), true
+		case "complete":
+			return d, nil, true
+		}
+		return "", nil, false
+	}
+
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		if line == "" {
+			if d, err, done := flush(); done {
+				return d, err
+			}
+			continue
+		}
+		if strings.HasPrefix(line, ":") {
+			continue // comment
+		}
+		field, value, _ := strings.Cut(line, ":")
+		switch field {
+		case "event":
+			event = strings.TrimPrefix(value, " ")
+		case "data":
+			data = append(data, strings.TrimPrefix(value, " "))
+		}
+	}
+
+	// A stream that ends without a trailing blank line still has a last event.
+	if d, err, done := flush(); done {
+		return d, err
+	}
+
+	return "", fmt.Errorf("hfs no complete event in resp")
+}
+
+// apiDetail digs Gradio's "detail" out of an error body, falling back to the raw
+// body so an unrecognised shape still says something useful.
+func apiDetail(body []byte) string {
+	var v struct {
+		Detail json.RawMessage `json:"detail"`
+	}
+	if err := json.Unmarshal(body, &v); err == nil && len(v.Detail) > 0 {
+		var s string
+		if err := json.Unmarshal(v.Detail, &s); err == nil {
+			return s
+		}
+		return string(v.Detail)
+	}
+
+	s := strings.TrimSpace(string(body))
+	if r := []rune(s); len(r) > 200 {
+		s = string(r[:200]) + "..."
+	}
+	if s == "" {
+		return "no response body"
+	}
+	return s
 }
 
 func (h *HFSpace[I, O]) DoFD(endpoint string, params ...I) ([]byte, error) {
@@ -308,6 +413,8 @@ func ParseFileData(src any) (*FileData, error) {
 	var fd FileData
 
 	switch v := src.(type) {
+	case nil:
+		return nil, fmt.Errorf("hfs nil filedata")
 	case FileData:
 		fd = v
 	case *FileData:
@@ -348,9 +455,8 @@ func FileDataDownload(fileData *FileData, timeout time.Duration) ([]byte, error)
 		return nil, fmt.Errorf("hfs filedata URL is empty")
 	}
 
-	// Create HTTP client with timeout
 	client := &http.Client{
-		Timeout: timeout * time.Second,
+		Timeout: timeout,
 	}
 
 	// Create the request
@@ -397,13 +503,18 @@ func GetFileData(src any) ([]byte, error) {
 func GetGalleryImage(src any, idx int) ([]byte, error) {
 	garr, ok := src.([]any)
 	if !ok {
-		return nil, fmt.Errorf("hfs not gallery")
+		return nil, fmt.Errorf("hfs not gallery: %T", src)
 	}
-	if len(garr) < idx+1 {
+	if idx < 0 || len(garr) <= idx {
 		return nil, fmt.Errorf("hfs no idx in gallery")
 	}
-	json := garr[idx].(map[string]any)
-	fd, err := ParseFileData(json["image"])
+
+	item, ok := garr[idx].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("hfs gallery item is %T, not a map", garr[idx])
+	}
+
+	fd, err := ParseFileData(item["image"])
 	if err != nil {
 		return nil, err
 	}
